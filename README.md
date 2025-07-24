@@ -125,6 +125,11 @@ Deployment is automated via **GitHub Actions** with images pushed to **GitHub Co
 
 4. **Caddy handles TLS & reverse‑proxy** on ports 80/443.
 
+3. **Security Configuration**
+   - Only ports 80 (HTTP) and 443 (HTTPS) are exposed to the internet
+   - App, database, Redis, and Elasticsearch ports are **not published** in production for security
+   - All services communicate internally via Docker's private network (e.g., `app:3000`, `postgres:5432`, `redis:6379`)
+
 ## Contributing
 1. Fork the repo
 2. Create a feature branch (`git checkout -b feat/awesome`)
