@@ -1,0 +1,396 @@
+name: Build and Deploy to Production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.prod
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create deployment files
+        run: |
+          # Create deployment directory
+          mkdir -p deploy
+          
+          # Copy necessary files for deployment
+          cp docker-compose.prod.yml deploy/
+          cp Caddyfile deploy/
+          
+          # Create environment file from secrets
+          cat > deploy/.env.prod << EOF
+          # Database Configuration
+          POSTGRES_DB=lha_donate_prod
+          POSTGRES_USER=lha_prod_user
+          POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+          DATABASE_URL=postgresql://lha_prod_user:${{ secrets.POSTGRES_PASSWORD }}@postgres:5432/lha_donate_prod
+          
+          # Redis Configuration
+          REDIS_URL=redis://:${{ secrets.REDIS_PASSWORD }}@redis:6379
+          REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
+          
+          # Elasticsearch Configuration
+          ELASTIC_URL=http://elasticsearch:9200
+          ELASTIC_USERNAME=elastic
+          ELASTIC_PASSWORD=${{ secrets.ELASTIC_PASSWORD }}
+          
+          # Application Configuration
+          NODE_ENV=production
+          NEXTAUTH_URL=https://${{ secrets.DOMAIN }}
+          NEXTAUTH_SECRET=${{ secrets.NEXTAUTH_SECRET }}
+          
+          # Authentication
+          BETTER_AUTH_API_KEY=${{ secrets.BETTER_AUTH_API_KEY }}
+          BETTER_AUTH_SECRET=${{ secrets.BETTER_AUTH_SECRET }}
+          JWT_SECRET=${{ secrets.JWT_SECRET }}
+          
+          # Email Configuration
+          SENDGRID_API_KEY=${{ secrets.SENDGRID_API_KEY }}
+          SENDGRID_FROM_EMAIL=${{ secrets.SENDGRID_FROM_EMAIL }}
+          
+          # OAuth Providers
+          GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GITHUB_CLIENT_SECRET=${{ secrets.GITHUB_CLIENT_SECRET }}
+          
+          # Monitoring
+          SENTRY_DSN=${{ secrets.SENTRY_DSN }}
+          SENTRY_AUTH_TOKEN=${{ secrets.SENTRY_AUTH_TOKEN }}
+          
+          # OAuth Client IDs (Public)
+          GOOGLE_CLIENT_ID=${{ vars.GOOGLE_CLIENT_ID }}
+          GITHUB_CLIENT_ID=${{ vars.GITHUB_CLIENT_ID }}
+          
+          # Domain Configuration
+          DOMAIN=${{ vars.DOMAIN }}
+          
+          # Security Configuration
+          SECURITY_HEADERS_ENABLED=true
+          CSP_ENABLED=true
+          DEBUG=false
+          
+          # Rate Limiting Configuration
+          RATE_LIMIT_WINDOW_MS=900000
+          RATE_LIMIT_MAX_REQUESTS=100
+          
+          # Backup Configuration
+          BACKUP_ENABLED=true
+          BACKUP_SCHEDULE=0 2 * * *
+          BACKUP_RETENTION_DAYS=30
+          EOF
+          
+          # Update docker-compose to use GHCR image
+          cat > deploy/docker-compose.prod.yml << 'EOF'
+          version: '3.8'
+          
+          networks:
+            frontend:
+              driver: bridge
+            backend:
+              driver: bridge
+              internal: true
+          
+          services:
+            app:
+              image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+              env_file:
+                - .env.prod
+              restart: unless-stopped
+              networks:
+                - frontend
+                - backend
+              depends_on:
+                postgres:
+                  condition: service_healthy
+                redis:
+                  condition: service_healthy
+                elasticsearch:
+                  condition: service_healthy
+              security_opt:
+                - no-new-privileges:true
+              read_only: true
+              tmpfs:
+                - /tmp
+                - /app/.next/cache
+          
+            postgres:
+              image: postgres:15-alpine
+              environment:
+                POSTGRES_DB: ${POSTGRES_DB}
+                POSTGRES_USER: ${POSTGRES_USER}
+                POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+              volumes:
+                - postgres_data:/var/lib/postgresql/data
+              networks:
+                - backend
+              restart: unless-stopped
+              healthcheck:
+                test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+                interval: 30s
+                timeout: 10s
+                retries: 5
+                start_period: 30s
+              deploy:
+                resources:
+                  limits:
+                    memory: 512M
+                    cpus: '0.3'
+              security_opt:
+                - no-new-privileges:true
+          
+            redis:
+              image: redis:7-alpine
+              command: redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes
+              volumes:
+                - redis_data:/data
+              networks:
+                - backend
+              restart: unless-stopped
+              healthcheck:
+                test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+                interval: 30s
+                timeout: 10s
+                retries: 5
+                start_period: 30s
+              deploy:
+                resources:
+                  limits:
+                    memory: 256M
+                    cpus: '0.2'
+              security_opt:
+                - no-new-privileges:true
+          
+            elasticsearch:
+              image: elasticsearch:8.11.0
+              environment:
+                - discovery.type=single-node
+                - xpack.security.enabled=true
+                - ELASTIC_USERNAME=${ELASTIC_USERNAME}
+                - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+                - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+              volumes:
+                - elasticsearch_data:/usr/share/elasticsearch/data
+              networks:
+                - backend
+              restart: unless-stopped
+              healthcheck:
+                test: ["CMD-SHELL", "curl -u ${ELASTIC_USERNAME}:${ELASTIC_PASSWORD} -f http://localhost:9200/_cluster/health || exit 1"]
+                interval: 30s
+                timeout: 10s
+                retries: 5
+                start_period: 60s
+              deploy:
+                resources:
+                  limits:
+                    memory: 1.5G
+                    cpus: '0.5'
+              security_opt:
+                - no-new-privileges:true
+          
+            postgres-backup:
+              image: postgres:15-alpine
+              environment:
+                POSTGRES_DB: ${POSTGRES_DB}
+                POSTGRES_USER: ${POSTGRES_USER}
+                POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+                BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
+              volumes:
+                - /home/${USER}/lha_backup:/backup
+                - ./backup-script.sh:/backup-script.sh:ro
+              networks:
+                - backend
+              restart: unless-stopped
+              depends_on:
+                postgres:
+                  condition: service_healthy
+              command: sh -c "chmod +x /backup-script.sh && crond -f"
+              deploy:
+                resources:
+                  limits:
+                    memory: 64M
+                    cpus: '0.1'
+          
+            caddy:
+              image: caddy:2-alpine
+              environment:
+                - DOMAIN=${DOMAIN}
+              ports:
+                - "80:80"
+                - "443:443"
+              volumes:
+                - ./Caddyfile:/etc/caddy/Caddyfile:ro
+                - caddy_data:/data
+                - caddy_config:/config
+              networks:
+                - frontend
+              restart: unless-stopped
+              depends_on:
+                - app
+              deploy:
+                resources:
+                  limits:
+                    memory: 128M
+                    cpus: '0.1'
+              security_opt:
+                - no-new-privileges:true
+          
+          volumes:
+            postgres_data:
+            redis_data:
+            elasticsearch_data:
+            caddy_data:
+            caddy_config:
+          EOF
+
+      - name: Create backup script
+        run: |
+          cat > deploy/backup-script.sh << 'EOF'
+          #!/bin/sh
+          
+          # PostgreSQL Backup Script
+          # Runs daily at 2 AM via cron
+          
+          BACKUP_DIR="/backup"
+          DATE=$(date +%Y%m%d_%H%M%S)
+          BACKUP_FILE="lha_donate_backup_${DATE}.sql"
+          RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-30}
+          
+          # Create backup directory
+          mkdir -p ${BACKUP_DIR}
+          
+          # Create backup
+          echo "Starting backup: ${BACKUP_FILE}"
+          PGPASSWORD=${POSTGRES_PASSWORD} pg_dump -h postgres -U ${POSTGRES_USER} -d ${POSTGRES_DB} > ${BACKUP_DIR}/${BACKUP_FILE}
+          
+          if [ $? -eq 0 ]; then
+              echo "Backup completed successfully: ${BACKUP_FILE}"
+              
+              # Compress backup
+              gzip ${BACKUP_DIR}/${BACKUP_FILE}
+              echo "Backup compressed: ${BACKUP_FILE}.gz"
+              
+              # Remove old backups
+              find ${BACKUP_DIR} -name "lha_donate_backup_*.sql.gz" -mtime +${RETENTION_DAYS} -delete
+              echo "Old backups cleaned up (retention: ${RETENTION_DAYS} days)"
+              
+              # Log backup size
+              BACKUP_SIZE=$(du -h ${BACKUP_DIR}/${BACKUP_FILE}.gz | cut -f1)
+              echo "Backup size: ${BACKUP_SIZE}"
+          else
+              echo "Backup failed!"
+              exit 1
+          fi
+          EOF
+          
+          # Create crontab for backup service
+          cat > deploy/backup-crontab << 'EOF'
+          0 2 * * * /backup-script.sh >> /var/log/backup.log 2>&1
+          EOF
+
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ vars.VPS_HOST }}
+          username: ${{ vars.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            # Create deployment directory
+            mkdir -p /home/${{ vars.VPS_USER }}/lha-donate-deploy
+            mkdir -p /home/${{ vars.VPS_USER }}/lha_backup
+            
+            # Set proper permissions for backup directory
+            chmod 755 /home/${{ vars.VPS_USER }}/lha_backup
+            
+            # Stop existing containers
+            cd /home/${{ vars.VPS_USER }}/lha-donate-deploy
+            docker-compose -f docker-compose.prod.yml down || true
+            
+            # Pull latest image
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            
+            # Remove old images
+            docker image prune -f
+
+      - name: Copy deployment files
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ vars.VPS_HOST }}
+          username: ${{ vars.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          source: "deploy/*"
+          target: "/home/${{ vars.VPS_USER }}/lha-donate-deploy/"
+          strip_components: 1
+
+      - name: Start services
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ vars.VPS_HOST }}
+          username: ${{ vars.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            cd /home/${{ vars.VPS_USER }}/lha-donate-deploy
+            
+            # Make backup script executable
+            chmod +x backup-script.sh
+            
+            # Start services
+            docker-compose -f docker-compose.prod.yml up -d
+            
+            # Wait for services to be healthy
+            echo "Waiting for services to be healthy..."
+            timeout 300 docker-compose -f docker-compose.prod.yml exec -T app curl -f http://localhost:3000/api/health || echo "Health check timeout"
+            
+            # Show status
+            docker-compose -f docker-compose.prod.yml ps
