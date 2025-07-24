@@ -1,5 +1,12 @@
 version: '3.8'
 
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+    internal: true
+
 services:
   app:
     build:
@@ -8,10 +15,15 @@ services:
     env_file:
       - .env.prod
     restart: unless-stopped
+    networks:
+      - frontend
+      - backend
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      elasticsearch:
         condition: service_healthy
     security_opt:
       - no-new-privileges:true
@@ -29,11 +41,13 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
+    networks:
+      - backend
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      retries: 5
       start_period: 30s
     deploy:
       resources:
@@ -49,11 +63,13 @@ services:
     volumes:
       - redis_data:/data
     restart: unless-stopped
+    networks:
+      - backend
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      retries: 5
       start_period: 30s
     deploy:
       resources:
@@ -74,11 +90,13 @@ services:
     volumes:
       - elasticsearch_data:/usr/share/elasticsearch/data
     restart: unless-stopped
+    networks:
+      - backend
     healthcheck:
       test: ["CMD-SHELL", "curl -u ${ELASTIC_USERNAME}:${ELASTIC_PASSWORD} -f http://localhost:9200/_cluster/health || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      retries: 5
       start_period: 60s
     deploy:
       resources:
@@ -87,6 +105,29 @@ services:
           cpus: '0.5'
     security_opt:
       - no-new-privileges:true
+
+  postgres-backup:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
+    volumes:
+      - ~/lha_backup:/backup
+      - ./backup-script.sh:/backup-script.sh:ro
+    networks:
+      - backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: sh -c "chmod +x /backup-script.sh && crond -f"
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: '0.1'
 
   caddy:
     image: caddy:2-alpine
@@ -99,6 +140,8 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+    networks:
+      - frontend
     restart: unless-stopped
     depends_on:
       - app
