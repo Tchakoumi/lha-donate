@@ -1,0 +1,25 @@
+{$DOMAIN} {
+    reverse_proxy app:3000
+    
+    # Security headers
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        X-XSS-Protection "1; mode=block"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
+    }
+    
+    # Enable compression
+    encode gzip
+    
+    # Rate limiting
+    rate_limit {
+        zone static_files {
+            key {remote_host}
+            events 100
+            window 1m
+        }
+    }
+}
