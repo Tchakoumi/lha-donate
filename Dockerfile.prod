@@ -12,36 +12,32 @@ RUN addgroup --system --gid 1001 nodejs && \
 
 WORKDIR /app
 
-# Dependencies stage
+# Dependencies stage - only production dependencies
 FROM base AS deps
 COPY package*.json ./
-RUN npm ci --only=production --omit=dev && npm cache clean --force
+RUN npm ci --omit=dev && npm cache clean --force
 
-# Build stage
+# Build stage - includes dev dependencies for building
 FROM base AS build
 COPY package*.json ./
-RUN npm ci --include=dev
+RUN npm ci
 COPY . .
-
-# Build the application
-RUN npm run build && \
-    npm prune --omit=dev && \
-    npm cache clean --force
+RUN npm run build
 
 # Production stage
 FROM base AS production
 
-# Copy built application and dependencies
+# Copy only production dependencies from deps stage
 COPY --from=deps --chown=nextjs:nodejs /app/node_modules ./node_modules
+# Copy built application
 COPY --from=build --chown=nextjs:nodejs /app/.next ./.next
 COPY --from=build --chown=nextjs:nodejs /app/public ./public
 COPY --from=build --chown=nextjs:nodejs /app/package.json ./package.json
 
-# Security: Remove package managers and build tools
-RUN apk del npm && \
-    rm -rf /usr/local/lib/node_modules/npm
+# Remove package managers for security
+RUN apk del npm && rm -rf /usr/local/lib/node_modules/npm
 
-# Set proper permissions
+# Set proper permissions  
 RUN chown -R nextjs:nodejs /app
 
 # Switch to non-root user
