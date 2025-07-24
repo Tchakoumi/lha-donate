@@ -16,9 +16,34 @@
     
     # Rate limiting
     rate_limit {
+        # Strict rate limiting for authentication endpoints
+        zone auth_api {
+            key {remote_host}
+            events 5
+            window 1m
+            path /api/auth/*
+        }
+        
+        # Moderate rate limiting for general API endpoints
+        zone general_api {
+            key {remote_host}
+            events 30
+            window 1m
+            path /api/*
+        }
+        
+        # More permissive for static files
         zone static_files {
             key {remote_host}
             events 100
+            window 1m
+            path /static/*
+        }
+        
+        # Default rate limit for everything else
+        zone default {
+            key {remote_host}
+            events 60
             window 1m
         }
     }
