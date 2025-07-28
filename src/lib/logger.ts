@@ -15,7 +15,7 @@ export const logger = winston.createLogger({
         )
       : winston.format.json()
   ),
-  defaultMeta: { 
+  defaultMeta: {
     service: 'lha-donate-api',
     environment: process.env.NODE_ENV || 'development'
   },
@@ -49,7 +49,7 @@ export const logResponse = (method: string, path: string, status: number, durati
   })
 }
 
-export const logError = (message: string, error: Error, context?: Record<string, any>) => {
+export const logError = (message: string, error: Error, context?: Record<string, unknown>) => {
   logger.error(message, {
     error: {
       name: error.name,
@@ -70,7 +70,7 @@ export const logDatabaseQuery = (query: string, duration?: number, requestId?: s
   })
 }
 
-export const logSecurityEvent = (event: string, severity: 'low' | 'medium' | 'high' | 'critical', metadata?: Record<string, any>) => {
+export const logSecurityEvent = (event: string, severity: 'low' | 'medium' | 'high' | 'critical', metadata?: Record<string, unknown>) => {
   const level = severity === 'critical' || severity === 'high' ? 'error' : 'warn'
   logger.log(level, 'Security Event', {
     event,
