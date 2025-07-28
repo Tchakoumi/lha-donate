@@ -4,15 +4,22 @@
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack",
-    "build": "next build",
+    "build": "prisma generate && next build",
     "start": "next start",
     "lint": "next lint",
-    "dev:docker": "docker compose -f docker-compose.dev.yml up"
+    "dev:docker": "docker compose -f docker-compose.dev.yml up",
+    "db:migrate": "prisma migrate dev",
+    "db:generate": "prisma generate",
+    "db:studio": "prisma studio",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:reset": "prisma migrate reset",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
     "react": "19.1.0",
     "react-dom": "19.1.0",
-    "next": "15.4.2"
+    "next": "15.4.2",
+    "@prisma/client": "^6.12.0"
   },
   "devDependencies": {
     "typescript": "^5",
@@ -23,6 +30,8 @@
     "tailwindcss": "^4",
     "eslint": "^9",
     "eslint-config-next": "15.4.2",
-    "@eslint/eslintrc": "^3"
+    "@eslint/eslintrc": "^3",
+    "prisma": "^6.12.0",
+    "tsx": "^4.19.0"
   }
 }
