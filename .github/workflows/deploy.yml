@@ -385,12 +385,23 @@ jobs:
             # Make backup script executable
             chmod +x backup-script.sh
             
-            # Start services
+            # Start database services first
+            docker-compose -f docker-compose.prod.yml up -d postgres redis elasticsearch
+            
+            # Wait for database to be ready
+            echo "Waiting for database to be ready..."
+            timeout 60 docker-compose -f docker-compose.prod.yml exec -T postgres pg_isready -U lha_prod_user -d lha_donate_prod
+            
+            # Run database migrations
+            echo "Running database migrations..."
+            docker-compose -f docker-compose.prod.yml run --rm app sh -c "npx prisma migrate deploy && npx prisma generate"
+            
+            # Start all services
             docker-compose -f docker-compose.prod.yml up -d
             
-            # Wait for services to be healthy
-            echo "Waiting for services to be healthy..."
-            timeout 300 docker-compose -f docker-compose.prod.yml exec -T app curl -f http://localhost:3000/api/health || echo "Health check timeout"
+            # Wait for app to be healthy
+            echo "Waiting for application to be healthy..."
+            timeout 300 sh -c 'until docker-compose -f docker-compose.prod.yml exec -T app curl -f http://localhost:3000/api/health 2>/dev/null; do echo "Waiting for app..."; sleep 5; done' || echo "Health check timeout"
             
-            # Show status
+            # Show final status
             docker-compose -f docker-compose.prod.yml ps
