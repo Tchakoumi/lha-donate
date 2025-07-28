@@ -13,9 +13,13 @@ services:
     env_file:
       - .env
     depends_on:
-      - postgres
-      - redis
-      - elasticsearch
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      elasticsearch:
+        condition: service_started
+    command: sh -c "npm install && npx prisma migrate dev --name init && npx prisma generate && npx prisma db seed && npm run dev"
 
   postgres:
     image: postgres:15-alpine
@@ -27,6 +31,11 @@ services:
       - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7-alpine
