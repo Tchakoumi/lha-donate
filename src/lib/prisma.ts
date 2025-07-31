@@ -18,3 +18,18 @@ if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma
 export const disconnectPrisma = async () => {
   await prisma.$disconnect()
 }
+
+// Graceful shutdown handlers (only in Node.js runtime, not Edge Runtime)
+if (typeof process !== 'undefined' && process.env.NEXT_RUNTIME !== 'edge') {
+  process.on('SIGINT', async () => {
+    console.log('🔄 Gracefully shutting down Prisma...');
+    await prisma.$disconnect();
+    process.exit(0);
+  });
+
+  process.on('SIGTERM', async () => {
+    console.log('🔄 Gracefully shutting down Prisma...');
+    await prisma.$disconnect();
+    process.exit(0);
+  });
+}
