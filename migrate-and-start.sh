@@ -16,11 +16,8 @@ npx prisma migrate deploy
 echo "⚙️  Generating Prisma client..."
 npx prisma generate
 
-# Seed database if needed (only on first deployment)
-if [ "${SEED_DATABASE}" = "true" ]; then
-  echo "🌱 Seeding database..."
-  npx prisma db seed || echo "⚠️  Seeding failed or already completed"
-fi
+# Database seeding has been disabled - users will be created via signup
+echo "ℹ️ Database seeding disabled - users created via signup"
 
 echo "🎉 Application setup complete, starting Next.js..."
 
