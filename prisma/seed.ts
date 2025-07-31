@@ -1,27 +1,16 @@
 import { PrismaClient, UserRole } from '@prisma/client'
+import { hash } from 'bcryptjs'
+import { initializeElasticsearch, indexUser } from '../src/lib/elasticsearch'
 
 const prisma = new PrismaClient()
 
 async function main() {
   console.log('🌱 Starting minimal database seed...')
 
-  // Create super admin user (essential for system access)
-  const adminUser = await prisma.user.upsert({
-    where: { email: 'admin@lha-donate.org' },
-    update: {
-      // Update admin user if exists (ensure role is correct)
-      role: UserRole.SUPER_ADMIN,
-      isActive: true,
-    },
-    create: {
-      email: 'admin@lha-donate.org',
-      name: 'LHA Super Administrator',
-      role: UserRole.SUPER_ADMIN,
-      isActive: true,
-    },
-  })
+  // Initialize Elasticsearch
+  await initializeElasticsearch()
 
-  console.log('✅ Created/updated super admin user:', adminUser.email)
+  console.log('ℹ️ User seeding has been removed - users will be created via signup')
 
   // Create essential system configuration
   await prisma.systemConfig.upsert({
